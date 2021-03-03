@@ -33,16 +33,58 @@ import Foundation
     }
 
     @objc func downloadFile(_ call: CAPPluginCall) {
-        // Protect against bad values from JS before calling request
-        guard let u = call.getString("url") else { return call.reject("Must provide a URL") }
-        guard let _ = call.getString("filePath") else { return call.reject("Must provide a file path to download the file to") }
-        guard let _ = URL(string: u) else { return call.reject("Invalid URL") }
-
-        do {
-            try HttpRequestHandler.request(call)
-        } catch let e {
-            call.reject(e.localizedDescription)
+        guard let urlValue = call.getString("url") else {
+          return call.reject("Must provide a URL")
         }
+        guard let filePath = call.getString("filePath") else {
+          return call.reject("Must provide a file path to download the file to")
+        }
+
+        let fileDirectory = call.getString("fileDirectory") ?? "DOCUMENTS"
+
+        guard let url = URL(string: urlValue) else {
+          return call.reject("Invalid URL")
+        }
+
+        let task = URLSession.shared.downloadTask(with: url) { (downloadLocation, response, error) in
+          if error != nil {
+            CAPLog.print("Error on download file", downloadLocation, response, error)
+            call.reject("Error", "DOWNLOAD", error, [:])
+            return
+          }
+
+          guard let location = downloadLocation else {
+            call.reject("Unable to get file after downloading")
+            return
+          }
+
+          // TODO: Move to abstracted FS operations
+          let fileManager = FileManager.default
+
+          let foundDir = FilesystemUtils.getDirectory(directory: fileDirectory)
+          let dir = fileManager.urls(for: foundDir, in: .userDomainMask).first
+
+          do {
+            let dest = dir!.appendingPathComponent(filePath)
+            print("File Dest", dest.absoluteString)
+
+            try FilesystemUtils.createDirectoryForFile(dest, true)
+
+            try fileManager.moveItem(at: location, to: dest)
+            call.resolve([
+              "path": dest.absoluteString
+            ])
+          } catch let e {
+            call.reject("Unable to download file", "DOWNLOAD", e)
+            return
+          }
+
+
+          CAPLog.print("Downloaded file", location)
+          call.resolve()
+        }
+
+        task.resume()
     }
 
     @objc func uploadFile(_ call: CAPPluginCall) {
